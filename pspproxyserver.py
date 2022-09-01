@@ -6,35 +6,74 @@ from http.server import HTTPServer
 from http.client import HTTPMessage
 from requests import get
 from sys import argv
-
-global site
-site = "https://en.wikipedia.org/"
+from urllib.parse import urlparse
 
 
 class PSPProxyHandler(BaseHTTPRequestHandler):
 
-    def do_GET(self):
-        if self.path != '/' or 'favicon.ico' not in self.path:
+    site = "https://en.wikipedia.org/"
+    domain = "en.wikipedia.org"
 
-            response = get(site + self.path)
+    def do_GET(self):
+        try:    
+            if self.path == "/":
+                self.send_response(302)
+                self.send_header('Location', '/en.wikipedia.org/')
+                self.end_headers()
+                return
+            elif self.path == '/robots.txt':
+                self.send_response(200)
+                self.wfile.write("User-agent: *\nDisallow: /\n".encode('utf-8'))
+                return 
+        
+            self.domain = self.path.split('/')[0]
+            self.site = "https:/" + self.domain
+            response = get(self.site + self.path)
 
             self.send_response(response.status_code)
-            
+            ishtml = False
             # add all headers from the original request
             # except for content-encoding, we are forcing utf-8
-            for h in response.headers.keys():
-                if h.lower() not in ["content-encoding"]:
-                    self.send_header(h, response.headers[h])
+            to_exclude = ["Content-Encoding", 'Referer', 'Host']
+            for x in to_exclude:
+                try:
+                    response.headers.pop(to_exclude)
+                except Exception as e:
+                    pass
+                try:
+                    response.headers.pop(to_exclude.lower())
+                except Exception as e:
+                    pass
+            if "Content-Type" in response.headers.keys():
+                if 'text/html' in response.headers["Content-Type"].lower():
+                    ishtml = True
+            if "content-type" in response.headers.keys():
+                if 'text/html' in response.headers["content-type"].lower():
+                    ishtml = True
+        
             self.end_headers()
+            
+            if ishtml:
+                print("html: true")
+                html = response.content.decode()
+                print(response.url)
+                new_url = urlparse(response.url).netloc
+                print(new_url)
+                html = html.replace('href="', 'href="/' + new_url + '/')
+                html = html.replace("href=/", "href='/" + new_url + '/')
+            
+                html = html.replace('src="', 'src="/' + new_url + '/')
+                html = html.replace("src='", "src='/" + new_url + '/')
 
-            # return the html
-            # this will produce errors in the console, you can safely ignore them
-            # TODO: add try and catch and only turn those errors into warnings
-            self.wfile.write(response.content.decode().replace('src="//', 'src="http://').replace(
-                "src='//", "src='http://").replace('https://', 'http://').encode('utf-8'))
-            # for some reason wikipedia's html uses "\\<domain name>" instead of "https://<domain name>" when linking to images
+                html = html.replace('src="/' + new_url + '///', 'src="/')
+                html = html.replace("src='" + new_url + '///', "src='/")
 
 
+                self.wfile.write(html.encode('utf-8'))
+            else:
+                self.wfile.write(response.content)
+        except Exception as e:
+            print("WARNING: " + str(e))
 if __name__ == "__main__":
     if len(argv) <= 1:
         print("Please specify port number!")
